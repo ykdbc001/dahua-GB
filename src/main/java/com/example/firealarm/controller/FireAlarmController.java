@@ -194,6 +194,13 @@ public class FireAlarmController {
         return ResponseEntity.ok(dahuaSimulatorService.getStatus());
     }
 
+    @PostMapping("/dahua-simulator/bound-status")
+    public ResponseEntity<Map<String, Object>> sendDahuaBoundStatus(@RequestBody Map<String, Object> body) {
+        byte componentStatus = (byte) parseInt(body, "componentStatus", 0x01);
+        dahuaSimulatorService.sendBoundStatus(componentStatus);
+        return ResponseEntity.ok(dahuaSimulatorService.getStatus());
+    }
+
     @PostMapping("/dahua-simulator/all-states")
     public ResponseEntity<Map<String, Object>> sendDahuaAllStates(@RequestBody Map<String, Object> body) {
         byte componentType = (byte) parseInt(body, "componentType", 0x19);

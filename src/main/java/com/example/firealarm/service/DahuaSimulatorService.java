@@ -26,11 +26,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * 大华定制独立模拟器。
  *
- * <p>支持：
- * 1. 独立 TCP 连接与注册帧发送；
- * 2. IMEI / SN / ICCID / IMSI 等标识可配置；
- * 3. 单个设备状态、全部设备、全部状态矩阵触发；
- * 4. 与 demo 模拟器并行存在，互不影响。</p>
+ * <p>支持单终端和终端池两种模式：
+ * 1. 默认仍可按原有接口模拟单个 IMEI；
+ * 2. 可通过 terminals 配置多个终端，每个 IMEI 绑定一个设备类型与地址；
+ * 3. start/register/system-status 会作用到全部终端；
+ * 4. bound-status 会按终端各自绑定的设备类型/地址群发指定状态。</p>
  */
 @Service
 public class DahuaSimulatorService {
@@ -91,6 +91,7 @@ public class DahuaSimulatorService {
             FireProtocolConstant.ComponentType.FIRE_DOOR_MONITOR,
             FireProtocolConstant.ComponentType.ALARM_DEVICE
     };
+
     private static final byte[] ALL_COMPONENT_STATUSES = {
             FireProtocolConstant.ComponentStatus.NORMAL,
             FireProtocolConstant.ComponentStatus.FIRE_ALARM,
@@ -108,29 +109,22 @@ public class DahuaSimulatorService {
 
     private final DahuaProtocolParser protocolParser;
     private final AtomicBoolean running = new AtomicBoolean(false);
-    private final CopyOnWriteArrayList<ScheduledFuture<?>> scheduledTasks = new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<ScheduledFuture<?>> scheduledTasks = new CopyOnWriteArrayList<ScheduledFuture<?>>();
 
     private volatile ScheduledExecutorService scheduler;
-    private volatile Thread receiveThread;
-    private volatile Socket socket;
-    private volatile OutputStream outputStream;
-    private volatile InputStream inputStream;
-    private volatile int serialNumber = 1;
-
     private volatile String serverHost = "localhost";
-    private volatile byte deviceType = FireProtocolConstant.ControlUnitType.FIRE_ALARM_SYSTEM;
     private volatile byte serverType = 0x00;
     private volatile String serverAddress = "FFFFFFFFFFFF";
-    private volatile String imei = "865176080842620";
-    private volatile String imsi = "460001234567890";
-    private volatile String iccid = "89860012345678901234";
-    private volatile String sn = "DH-SIM-00000001";
-    private volatile String productModel = "DH-HY-SIM";
-    private volatile int keepaliveSeconds = 28800;
+    private volatile byte deviceType = FireProtocolConstant.ControlUnitType.FIRE_ALARM_SYSTEM;
     private volatile boolean autoHeartbeat = true;
+    private volatile int keepaliveSeconds = 28800;
+
+    private final List<TerminalConfig> terminals = new ArrayList<TerminalConfig>();
+    private final List<TerminalSession> sessions = new ArrayList<TerminalSession>();
 
     public DahuaSimulatorService(DahuaProtocolParser protocolParser) {
         this.protocolParser = protocolParser;
+        this.terminals.add(defaultTerminal());
     }
 
     public boolean isRunning() {
@@ -142,9 +136,14 @@ public class DahuaSimulatorService {
             return;
         }
         running.set(true);
-        scheduler = Executors.newScheduledThreadPool(2);
+        scheduler = Executors.newScheduledThreadPool(Math.max(2, terminals.size() * 2));
         scheduledTasks.clear();
-        scheduledTasks.add(scheduler.schedule(this::startInternal, 300, TimeUnit.MILLISECONDS));
+        scheduledTasks.add(scheduler.schedule(new Runnable() {
+            @Override
+            public void run() {
+                startInternal();
+            }
+        }, 300, TimeUnit.MILLISECONDS));
     }
 
     public synchronized void stop() {
@@ -159,11 +158,7 @@ public class DahuaSimulatorService {
             scheduler.shutdownNow();
             scheduler = null;
         }
-        if (receiveThread != null) {
-            receiveThread.interrupt();
-            receiveThread = null;
-        }
-        closeConnection();
+        closeAllSessions();
         log.info("[大华模拟器] 已停止");
     }
 
@@ -177,26 +172,11 @@ public class DahuaSimulatorService {
         if (body.containsKey("serverAddress")) {
             serverAddress = String.valueOf(body.get("serverAddress"));
         }
-        if (body.containsKey("deviceType")) {
-            deviceType = parseByte(body.get("deviceType"), deviceType);
-        }
         if (body.containsKey("serverType")) {
             serverType = parseByte(body.get("serverType"), serverType);
         }
-        if (body.containsKey("imei")) {
-            imei = digitsOnly(String.valueOf(body.get("imei")), imei);
-        }
-        if (body.containsKey("imsi")) {
-            imsi = digitsOnly(String.valueOf(body.get("imsi")), imsi);
-        }
-        if (body.containsKey("iccid")) {
-            iccid = digitsOnly(String.valueOf(body.get("iccid")), iccid);
-        }
-        if (body.containsKey("sn")) {
-            sn = String.valueOf(body.get("sn"));
-        }
-        if (body.containsKey("productModel")) {
-            productModel = String.valueOf(body.get("productModel"));
+        if (body.containsKey("deviceType")) {
+            deviceType = parseByte(body.get("deviceType"), deviceType);
         }
         if (body.containsKey("keepaliveSeconds")) {
             keepaliveSeconds = Math.max(1, parseInt(body.get("keepaliveSeconds"), keepaliveSeconds));
@@ -204,32 +184,69 @@ public class DahuaSimulatorService {
         if (body.containsKey("autoHeartbeat")) {
             autoHeartbeat = Boolean.parseBoolean(String.valueOf(body.get("autoHeartbeat")));
         }
+
+        if (body.containsKey("terminals") && body.get("terminals") instanceof List) {
+            replaceTerminals((List<?>) body.get("terminals"));
+        } else {
+            TerminalConfig terminal = ensurePrimaryTerminal();
+            if (body.containsKey("imei")) {
+                terminal.imei = digitsOnly(String.valueOf(body.get("imei")), terminal.imei);
+            }
+            if (body.containsKey("imsi")) {
+                terminal.imsi = digitsOnly(String.valueOf(body.get("imsi")), terminal.imsi);
+            }
+            if (body.containsKey("iccid")) {
+                terminal.iccid = digitsOnly(String.valueOf(body.get("iccid")), terminal.iccid);
+            }
+            if (body.containsKey("sn")) {
+                terminal.sn = String.valueOf(body.get("sn"));
+            }
+            if (body.containsKey("productModel")) {
+                terminal.productModel = String.valueOf(body.get("productModel"));
+            }
+            if (body.containsKey("componentType")) {
+                terminal.componentType = parseByte(body.get("componentType"), terminal.componentType);
+            }
+            if (body.containsKey("componentAddress")) {
+                terminal.componentAddress = normalizeHexAddress(String.valueOf(body.get("componentAddress")));
+            }
+        }
+
+        if (running.get()) {
+            stop();
+        }
         return getStatus();
     }
 
-    public Map<String, Object> getStatus() {
-        Map<String, Object> status = new LinkedHashMap<>();
+    public synchronized Map<String, Object> getStatus() {
+        LinkedHashMap<String, Object> status = new LinkedHashMap<String, Object>();
         status.put("running", running.get());
         status.put("serverHost", serverHost);
         status.put("serverPort", serverPort);
         status.put("deviceType", deviceType & 0xFF);
         status.put("serverType", serverType & 0xFF);
         status.put("serverAddress", serverAddress);
-        status.put("imei", imei);
-        status.put("sourceAddress", imei.length() > 12 ? imei.substring(imei.length() - 12) : imei);
-        status.put("imsi", imsi);
-        status.put("iccid", iccid);
-        status.put("sn", sn);
-        status.put("productModel", productModel);
-        status.put("keepaliveSeconds", keepaliveSeconds);
         status.put("autoHeartbeat", autoHeartbeat);
+        status.put("keepaliveSeconds", keepaliveSeconds);
+        status.put("terminalCount", terminals.size());
+        status.put("terminals", summarizeTerminals());
+
+        TerminalConfig primary = ensurePrimaryTerminal();
+        status.put("imei", primary.imei);
+        status.put("sourceAddress", sourceAddress12(primary.imei));
+        status.put("imsi", primary.imsi);
+        status.put("iccid", primary.iccid);
+        status.put("sn", primary.sn);
+        status.put("productModel", primary.productModel);
+        status.put("componentType", primary.componentType & 0xFF);
+        status.put("componentAddress", primary.componentAddress);
         return status;
     }
 
     public List<Map<String, Object>> getCatalog() {
-        List<Map<String, Object>> catalog = new ArrayList<>();
+        List<Map<String, Object>> catalog = new ArrayList<Map<String, Object>>();
         for (byte type : ALL_COMPONENT_TYPES) {
-            Map<String, Object> item = new LinkedHashMap<>();
+            Map<String, Object> item = new LinkedHashMap<String, Object>();
             item.put("componentType", type & 0xFF);
             List<Integer> supportedStatuses = new ArrayList<Integer>();
             for (byte status : ALL_COMPONENT_STATUSES) {
@@ -243,43 +260,56 @@ public class DahuaSimulatorService {
 
     public synchronized void sendRegistration() {
         ensureConnected();
-        sendRaw(buildRegistrationFrame(), "[大华模拟器] 发送注册帧");
+        for (TerminalSession session : sessions) {
+            sendRegistration(session);
+        }
     }
 
     public synchronized void sendSystemStatus(byte status) {
         ensureConnected();
-        sendRaw(buildSystemStatusFrame(status), "[大华模拟器] 发送系统状态 " + (status & 0xFF));
+        for (TerminalSession session : sessions) {
+            sendSystemStatus(session, status);
+        }
     }
 
     public synchronized void sendComponentStatus(byte componentType, byte componentStatus, String componentAddress) {
         ensureConnected();
-        byte[] payload = buildComponentPayload(componentType, componentStatus, addressStringToBytes(componentAddress));
-        byte[] frame = protocolParser.buildMessage(deviceType, imei, serverType, serverAddress,
-                serialNumber++, FireProtocolConstant.CommandType.UPLOAD_COMPONENT_STATUS, payload);
-        sendRaw(frame, "[大华模拟器] 发送部件状态 type=" + (componentType & 0xFF) + " status=" + (componentStatus & 0xFF));
+        String normalizedAddress = normalizeHexAddress(componentAddress);
+        for (TerminalSession session : sessions) {
+            sendComponentStatus(session, componentType, componentStatus, normalizedAddress);
+        }
     }
 
     public synchronized void sendAllDevices(byte componentStatus) {
         ensureConnected();
-        for (int i = 0; i < ALL_COMPONENT_TYPES.length; i++) {
-            sendComponentStatus(ALL_COMPONENT_TYPES[i], componentStatus, generateAddressHex(i));
+        for (TerminalSession session : sessions) {
+            sendComponentStatus(session, session.config.componentType, componentStatus, session.config.componentAddress);
         }
     }
 
     public synchronized void sendAllStates(byte componentType) {
         ensureConnected();
-        for (int i = 0; i < ALL_COMPONENT_STATUSES.length; i++) {
-            sendComponentStatus(componentType, ALL_COMPONENT_STATUSES[i], generateAddressHex(i));
+        for (TerminalSession session : sessions) {
+            for (byte status : ALL_COMPONENT_STATUSES) {
+                sendComponentStatus(session, componentType, status, session.config.componentAddress);
+            }
         }
     }
 
     public synchronized void sendFullMatrix() {
         ensureConnected();
         int idx = 0;
-        for (byte componentType : ALL_COMPONENT_TYPES) {
+        for (TerminalSession session : sessions) {
             for (byte status : ALL_COMPONENT_STATUSES) {
-                sendComponentStatus(componentType, status, generateAddressHex(idx++));
+                sendComponentStatus(session, session.config.componentType, status, generateAddressHex(idx++));
             }
+        }
+    }
+
+    public synchronized void sendBoundStatus(byte componentStatus) {
+        ensureConnected();
+        for (TerminalSession session : sessions) {
+            sendComponentStatus(session, session.config.componentType, componentStatus, session.config.componentAddress);
         }
     }
 
@@ -288,91 +318,96 @@ public class DahuaSimulatorService {
             return;
         }
         try {
-            socket = new Socket(serverHost, serverPort);
-            outputStream = socket.getOutputStream();
-            inputStream = socket.getInputStream();
-            log.info("[大华模拟器] 已连接到 {}:{}", serverHost, serverPort);
-
-            receiveThread = new Thread(this::receiveMessages, "dahua-simulator-recv");
-            receiveThread.setDaemon(true);
-            receiveThread.start();
-
-            sendRegistration();
-            sendSystemStatus(FireProtocolConstant.SystemStatus.NORMAL);
+            sessions.clear();
+            for (TerminalConfig terminal : terminals) {
+                TerminalSession session = openSession(terminal);
+                sessions.add(session);
+                sendRegistration(session);
+                sendSystemStatus(session, FireProtocolConstant.SystemStatus.NORMAL);
+            }
 
             if (autoHeartbeat) {
-                scheduledTasks.add(scheduler.scheduleAtFixedRate(() -> {
-                    if (running.get()) {
-                        sendSystemStatus(FireProtocolConstant.SystemStatus.NORMAL);
+                scheduledTasks.add(scheduler.scheduleAtFixedRate(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (running.get()) {
+                            sendSystemStatus(FireProtocolConstant.SystemStatus.NORMAL);
+                        }
                     }
                 }, 30, 30, TimeUnit.SECONDS));
             }
         } catch (Exception e) {
             log.error("[大华模拟器] 启动异常", e);
             running.set(false);
-            closeConnection();
+            closeAllSessions();
         }
     }
 
-    private void receiveMessages() {
+    private TerminalSession openSession(final TerminalConfig terminal) throws Exception {
+        TerminalSession session = new TerminalSession();
+        session.config = terminal.copy();
+        session.socket = new Socket(serverHost, serverPort);
+        session.outputStream = session.socket.getOutputStream();
+        session.inputStream = session.socket.getInputStream();
+        log.info("[大华模拟器] 终端 {} 已连接到 {}:{}", terminal.imei, serverHost, serverPort);
+
+        session.receiveThread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                receiveMessages(terminal.imei, session);
+            }
+        }, "dahua-simulator-recv-" + sourceAddress12(terminal.imei));
+        session.receiveThread.setDaemon(true);
+        session.receiveThread.start();
+        return session;
+    }
+
+    private void receiveMessages(String imeiValue, TerminalSession session) {
         try {
             byte[] buffer = new byte[1024];
             int bytesRead;
-            while (running.get() && (bytesRead = inputStream.read(buffer)) != -1) {
+            while (running.get() && session.inputStream != null && (bytesRead = session.inputStream.read(buffer)) != -1) {
                 byte[] data = new byte[bytesRead];
                 System.arraycopy(buffer, 0, data, 0, bytesRead);
-                log.info("[大华模拟器] 收到服务端响应: {}", bytesToHex(data));
+                log.info("[大华模拟器][{}] 收到服务端响应: {}", imeiValue, bytesToHex(data));
             }
         } catch (Exception e) {
             if (running.get()) {
-                log.error("[大华模拟器] 接收消息异常", e);
+                log.error("[大华模拟器][{}] 接收消息异常", imeiValue, e);
             }
         }
     }
 
     private void ensureConnected() {
-        if (outputStream == null) {
+        if (sessions.isEmpty()) {
             throw new IllegalStateException("大华模拟器未连接，请先启动");
         }
     }
 
-    private byte[] buildRegistrationFrame() {
-        byte[] payload = buildRegistrationPayload();
-        return protocolParser.buildMessage(deviceType, imei, serverType, serverAddress,
-                serialNumber++, COMMAND_REGISTER, payload);
+    private void sendRegistration(TerminalSession session) {
+        byte[] payload = buildRegistrationPayload(session.config);
+        byte[] frame = protocolParser.buildMessage(deviceType, session.config.imei, serverType, serverAddress,
+                session.serialNumber++, COMMAND_REGISTER, payload);
+        sendRaw(session, frame, "[大华模拟器][" + session.config.imei + "] 发送注册帧");
     }
 
-    private byte[] buildSystemStatusFrame(byte status) {
+    private void sendSystemStatus(TerminalSession session, byte status) {
         byte[] payload = new byte[13];
         payload[0] = status;
-        byte[] address = addressStringToBytes(sourceAddress12());
+        byte[] address = addressStringToBytes(sourceAddress12(session.config.imei));
         System.arraycopy(address, 0, payload, 1, 6);
         fillOccurTime(payload, 7);
-        return protocolParser.buildMessage(deviceType, imei, serverType, serverAddress,
-                serialNumber++, FireProtocolConstant.CommandType.UPLOAD_SYSTEM_STATUS, payload);
+        byte[] frame = protocolParser.buildMessage(deviceType, session.config.imei, serverType, serverAddress,
+                session.serialNumber++, FireProtocolConstant.CommandType.UPLOAD_SYSTEM_STATUS, payload);
+        sendRaw(session, frame, "[大华模拟器][" + session.config.imei + "] 发送系统状态 " + (status & 0xFF));
     }
 
-    private byte[] buildRegistrationPayload() {
-        byte[] payload = new byte[66];
-        int offset = 0;
-
-        payload[offset++] = 0x01;
-        payload[offset++] = 0x04;
-        payload[offset++] = 0x01;
-        payload[offset++] = 0x00;
-
-        putAsciiRightPadded(payload, offset, 16, sn);
-        offset += 16;
-        putBcdLeftPadded(payload, offset, 8, imei, 16);
-        offset += 8;
-        putBcdLeftPadded(payload, offset, 8, imsi, 16);
-        offset += 8;
-        putBcdLeftPadded(payload, offset, 10, iccid, 20);
-        offset += 10;
-        putUIntLe(payload, offset, 4, keepaliveSeconds);
-        offset += 4;
-        putAsciiRightPadded(payload, offset, 16, productModel);
-        return payload;
+    private void sendComponentStatus(TerminalSession session, byte componentType, byte componentStatus, String componentAddress) {
+        byte[] payload = buildComponentPayload(componentType, componentStatus, addressStringToBytes(componentAddress));
+        byte[] frame = protocolParser.buildMessage(deviceType, session.config.imei, serverType, serverAddress,
+                session.serialNumber++, FireProtocolConstant.CommandType.UPLOAD_COMPONENT_STATUS, payload);
+        sendRaw(session, frame, "[大华模拟器][" + session.config.imei + "] 发送部件状态 type="
+                + (componentType & 0xFF) + " status=" + (componentStatus & 0xFF) + " addr=" + componentAddress);
     }
 
     private static byte[] buildComponentPayload(byte componentType, byte componentStatus, byte[] addr6) {
@@ -394,34 +429,140 @@ public class DahuaSimulatorService {
         buffer[offset + 5] = (byte) now.getSecond();
     }
 
-    private void sendRaw(byte[] frame, String action) {
+    private byte[] buildRegistrationPayload(TerminalConfig terminal) {
+        byte[] payload = new byte[66];
+        int offset = 0;
+        payload[offset++] = 0x01;
+        payload[offset++] = 0x04;
+        payload[offset++] = 0x01;
+        payload[offset++] = 0x00;
+
+        putAsciiRightPadded(payload, offset, 16, terminal.sn);
+        offset += 16;
+        putBcdLeftPadded(payload, offset, 8, terminal.imei, 16);
+        offset += 8;
+        putBcdLeftPadded(payload, offset, 8, terminal.imsi, 16);
+        offset += 8;
+        putBcdLeftPadded(payload, offset, 10, terminal.iccid, 20);
+        offset += 10;
+        putUIntLe(payload, offset, 4, keepaliveSeconds);
+        offset += 4;
+        putAsciiRightPadded(payload, offset, 16, terminal.productModel);
+        return payload;
+    }
+
+    private void sendRaw(TerminalSession session, byte[] frame, String action) {
         try {
-            outputStream.write(frame);
-            outputStream.flush();
+            session.outputStream.write(frame);
+            session.outputStream.flush();
             log.info("{}: {}", action, bytesToHex(frame));
         } catch (Exception e) {
             throw new IllegalStateException("发送大华模拟报文失败", e);
         }
     }
 
-    private void closeConnection() {
-        try {
-            if (socket != null && !socket.isClosed()) {
-                socket.close();
+    private void replaceTerminals(List<?> rawTerminals) {
+        terminals.clear();
+        for (Object item : rawTerminals) {
+            if (!(item instanceof Map)) {
+                continue;
             }
-        } catch (Exception e) {
-            log.error("[大华模拟器] 关闭连接异常", e);
+            TerminalConfig terminal = defaultTerminal();
+            Map<?, ?> raw = (Map<?, ?>) item;
+            if (raw.containsKey("imei")) {
+                terminal.imei = digitsOnly(String.valueOf(raw.get("imei")), terminal.imei);
+            }
+            if (raw.containsKey("imsi")) {
+                terminal.imsi = digitsOnly(String.valueOf(raw.get("imsi")), terminal.imsi);
+            }
+            if (raw.containsKey("iccid")) {
+                terminal.iccid = digitsOnly(String.valueOf(raw.get("iccid")), terminal.iccid);
+            }
+            if (raw.containsKey("sn")) {
+                terminal.sn = String.valueOf(raw.get("sn"));
+            }
+            if (raw.containsKey("productModel")) {
+                terminal.productModel = String.valueOf(raw.get("productModel"));
+            }
+            if (raw.containsKey("componentType")) {
+                terminal.componentType = parseByte(raw.get("componentType"), terminal.componentType);
+            }
+            if (raw.containsKey("componentAddress")) {
+                terminal.componentAddress = normalizeHexAddress(String.valueOf(raw.get("componentAddress")));
+            }
+            terminals.add(terminal);
         }
-        socket = null;
-        outputStream = null;
-        inputStream = null;
+        if (terminals.isEmpty()) {
+            terminals.add(defaultTerminal());
+        }
     }
 
-    private String sourceAddress12() {
-        return imei.length() > 12 ? imei.substring(imei.length() - 12) : imei;
+    private TerminalConfig ensurePrimaryTerminal() {
+        if (terminals.isEmpty()) {
+            terminals.add(defaultTerminal());
+        }
+        return terminals.get(0);
     }
 
-    private byte[] addressStringToBytes(String hexOrDigits) {
+    private List<Map<String, Object>> summarizeTerminals() {
+        List<Map<String, Object>> list = new ArrayList<Map<String, Object>>();
+        for (TerminalConfig terminal : terminals) {
+            LinkedHashMap<String, Object> item = new LinkedHashMap<String, Object>();
+            item.put("imei", terminal.imei);
+            item.put("sourceAddress", sourceAddress12(terminal.imei));
+            item.put("imsi", terminal.imsi);
+            item.put("iccid", terminal.iccid);
+            item.put("sn", terminal.sn);
+            item.put("productModel", terminal.productModel);
+            item.put("componentType", terminal.componentType & 0xFF);
+            item.put("componentAddress", terminal.componentAddress);
+            list.add(item);
+        }
+        return list;
+    }
+
+    private void closeAllSessions() {
+        for (TerminalSession session : sessions) {
+            try {
+                if (session.receiveThread != null) {
+                    session.receiveThread.interrupt();
+                }
+                if (session.socket != null && !session.socket.isClosed()) {
+                    session.socket.close();
+                }
+            } catch (Exception e) {
+                log.error("[大华模拟器] 关闭终端 {} 连接异常", session.config != null ? session.config.imei : "unknown", e);
+            }
+        }
+        sessions.clear();
+    }
+
+    private static TerminalConfig defaultTerminal() {
+        TerminalConfig terminal = new TerminalConfig();
+        terminal.imei = "865176080842620";
+        terminal.imsi = "460001234567890";
+        terminal.iccid = "89860012345678901234";
+        terminal.sn = "DH-SIM-00000001";
+        terminal.productModel = "DH-HY-SIM";
+        terminal.componentType = FireProtocolConstant.ComponentType.GAS_DETECTOR;
+        terminal.componentAddress = "000000000001";
+        return terminal;
+    }
+
+    private static String sourceAddress12(String imeiValue) {
+        return imeiValue.length() > 12 ? imeiValue.substring(imeiValue.length() - 12) : imeiValue;
+    }
+
+    private static byte[] addressStringToBytes(String hexOrDigits) {
+        String normalized = normalizeHexAddress(hexOrDigits);
+        byte[] out = new byte[6];
+        for (int i = 0; i < 6; i++) {
+            out[i] = (byte) Integer.parseInt(normalized.substring(i * 2, i * 2 + 2), 16);
+        }
+        return out;
+    }
+
+    private static String normalizeHexAddress(String hexOrDigits) {
         String normalized = hexOrDigits == null ? "" : hexOrDigits.replaceAll("[^0-9A-Fa-f]", "").toUpperCase();
         if (normalized.isEmpty()) {
             normalized = "000000000000";
@@ -432,11 +573,7 @@ public class DahuaSimulatorService {
         while (normalized.length() < 12) {
             normalized = "0" + normalized;
         }
-        byte[] out = new byte[6];
-        for (int i = 0; i < 6; i++) {
-            out[i] = (byte) Integer.parseInt(normalized.substring(i * 2, i * 2 + 2), 16);
-        }
-        return out;
+        return normalized;
     }
 
     private String generateAddressHex(int seed) {
@@ -496,5 +633,36 @@ public class DahuaSimulatorService {
             sb.append(String.format("%02X ", b));
         }
         return sb.toString().trim();
+    }
+
+    private static class TerminalConfig {
+        private String imei;
+        private String imsi;
+        private String iccid;
+        private String sn;
+        private String productModel;
+        private byte componentType;
+        private String componentAddress;
+
+        private TerminalConfig copy() {
+            TerminalConfig copy = new TerminalConfig();
+            copy.imei = this.imei;
+            copy.imsi = this.imsi;
+            copy.iccid = this.iccid;
+            copy.sn = this.sn;
+            copy.productModel = this.productModel;
+            copy.componentType = this.componentType;
+            copy.componentAddress = this.componentAddress;
+            return copy;
+        }
+    }
+
+    private static class TerminalSession {
+        private TerminalConfig config;
+        private Socket socket;
+        private OutputStream outputStream;
+        private InputStream inputStream;
+        private Thread receiveThread;
+        private int serialNumber = 1;
     }
 }
