@@ -314,6 +314,33 @@ public class DahuaSimulatorService {
         }
     }
 
+    public synchronized Map<String, Object> generateAllTerminals() {
+        terminals.clear();
+        for (int i = 0; i < ALL_COMPONENT_TYPES.length; i++) {
+            terminals.add(generatedTerminal(i));
+        }
+        if (running.get()) {
+            stop();
+        }
+        return getStatus();
+    }
+
+    public synchronized Map<String, Object> generateAllAndSimulate() {
+        generateAllTerminals();
+        start();
+        if (scheduler != null) {
+            scheduledTasks.add(scheduler.schedule(new Runnable() {
+                @Override
+                public void run() {
+                    if (running.get()) {
+                        sendFullMatrix();
+                    }
+                }
+            }, 2, TimeUnit.SECONDS));
+        }
+        return getStatus();
+    }
+
     private void startInternal() {
         if (!running.get()) {
             return;
@@ -548,6 +575,19 @@ public class DahuaSimulatorService {
         terminal.productModel = "DH-HY-SIM";
         terminal.componentType = FireProtocolConstant.ComponentType.GAS_DETECTOR;
         terminal.componentAddress = "000000000001";
+        return terminal;
+    }
+
+    private static TerminalConfig generatedTerminal(int index) {
+        TerminalConfig terminal = new TerminalConfig();
+        int seq = index + 1;
+        terminal.imei = String.format("8651760808%05d", seq);
+        terminal.imsi = String.format("4600012345%05d", seq);
+        terminal.iccid = String.format("8986001234567890%04d", seq);
+        terminal.sn = String.format("SN-%03d", seq);
+        terminal.productModel = "DH-HY-SIM";
+        terminal.componentType = ALL_COMPONENT_TYPES[index];
+        terminal.componentAddress = String.format("%012X", seq);
         return terminal;
     }
 

@@ -92,4 +92,18 @@ class DahuaSimulatorServiceTest {
         assertEquals(74, terminalStatus.get(1).get("componentType"));
         assertEquals("000000000002", terminalStatus.get(1).get("componentAddress"));
     }
+
+    @Test
+    void shouldGenerateAll51DeviceTypeTerminals() {
+        DahuaSimulatorService service = new DahuaSimulatorService(new DahuaProtocolParser());
+
+        Map<String, Object> status = service.generateAllTerminals();
+
+        assertEquals(51, status.get("terminalCount"));
+        java.util.List<Map<String, Object>> terminalStatus = (java.util.List<Map<String, Object>>) status.get("terminals");
+        assertEquals("865176080800001", terminalStatus.get(0).get("imei"));
+        assertEquals("865176080800051", terminalStatus.get(50).get("imei"));
+        assertEquals("000000000001", terminalStatus.get(0).get("componentAddress"));
+        assertEquals("000000000033", terminalStatus.get(50).get("componentAddress"));
+    }
 }
