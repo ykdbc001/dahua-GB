@@ -3,6 +3,7 @@ package com.example.firealarm.server;
 import com.example.firealarm.protocol.ProtocolMode;
 import com.example.firealarm.protocol.dahua.DahuaProtocolProcessor;
 import com.example.firealarm.protocol.demo.DemoProtocolProcessor;
+import com.example.firealarm.service.DahuaDeviceIdentityService;
 import com.example.firealarm.service.DeviceChannelRegistry;
 import com.example.firealarm.service.ProtocolModeService;
 import io.netty.channel.ChannelHandler;
@@ -13,9 +14,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-/**
- * Netty 业务入口：按协议模式分派到 demo / 大华处理器。
- */
 @Component
 @ChannelHandler.Sharable
 public class FireAlarmNettyHandler extends ChannelInboundHandlerAdapter {
@@ -26,16 +24,19 @@ public class FireAlarmNettyHandler extends ChannelInboundHandlerAdapter {
     private final DemoProtocolProcessor demoProtocolProcessor;
     private final DahuaProtocolProcessor dahuaProtocolProcessor;
     private final DeviceChannelRegistry deviceChannelRegistry;
+    private final DahuaDeviceIdentityService dahuaDeviceIdentityService;
 
     public FireAlarmNettyHandler(
             ProtocolModeService protocolModeService,
             DemoProtocolProcessor demoProtocolProcessor,
             DahuaProtocolProcessor dahuaProtocolProcessor,
-            DeviceChannelRegistry deviceChannelRegistry) {
+            DeviceChannelRegistry deviceChannelRegistry,
+            DahuaDeviceIdentityService dahuaDeviceIdentityService) {
         this.protocolModeService = protocolModeService;
         this.demoProtocolProcessor = demoProtocolProcessor;
         this.dahuaProtocolProcessor = dahuaProtocolProcessor;
         this.deviceChannelRegistry = deviceChannelRegistry;
+        this.dahuaDeviceIdentityService = dahuaDeviceIdentityService;
     }
 
     @Override
@@ -47,6 +48,7 @@ public class FireAlarmNettyHandler extends ChannelInboundHandlerAdapter {
     public void channelInactive(ChannelHandlerContext ctx) {
         log.info("设备断开连接：{}", ctx.channel().remoteAddress());
         deviceChannelRegistry.removeIfChannel(ctx.channel());
+        dahuaDeviceIdentityService.remove(ctx.channel());
     }
 
     @Override

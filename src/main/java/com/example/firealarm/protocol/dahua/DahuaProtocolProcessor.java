@@ -2,6 +2,7 @@ package com.example.firealarm.protocol.dahua;
 
 import com.example.firealarm.model.FireAlarmEvent;
 import com.example.firealarm.model.FireMessage;
+import com.example.firealarm.service.DahuaDeviceIdentityService;
 import com.example.firealarm.service.DahuaFrameHistoryService;
 import com.example.firealarm.service.DeviceChannelRegistry;
 import com.example.firealarm.service.FireAlarmEventHandler;
@@ -28,18 +29,21 @@ public class DahuaProtocolProcessor {
     private final FireAlarmNotificationService notificationService;
     private final DeviceChannelRegistry deviceChannelRegistry;
     private final DahuaFrameHistoryService frameHistoryService;
+    private final DahuaDeviceIdentityService identityService;
 
     public DahuaProtocolProcessor(
             DahuaProtocolParser protocolParser,
             FireAlarmEventHandler eventHandler,
             FireAlarmNotificationService notificationService,
             DeviceChannelRegistry deviceChannelRegistry,
-            DahuaFrameHistoryService frameHistoryService) {
+            DahuaFrameHistoryService frameHistoryService,
+            DahuaDeviceIdentityService identityService) {
         this.protocolParser = protocolParser;
         this.eventHandler = eventHandler;
         this.notificationService = notificationService;
         this.deviceChannelRegistry = deviceChannelRegistry;
         this.frameHistoryService = frameHistoryService;
+        this.identityService = identityService;
     }
 
     public void processMessage(ChannelHandlerContext ctx, byte[] data) {
@@ -49,6 +53,8 @@ public class DahuaProtocolProcessor {
                 log.warn("[大华] 解析失败（校验/长度/起止符），已丢弃本帧，未回确认");
                 return;
             }
+
+            enrichDeviceIdentity(ctx, message);
 
             log.info("[大华] 收帧 命令=0x{} 流水号={} 源地址={}",
                     String.format("%02X", message.getCommand() & 0xFF),
@@ -67,6 +73,30 @@ public class DahuaProtocolProcessor {
             sendDahuaAck(ctx, message);
         } catch (Exception e) {
             log.error("[大华] 处理异常", e);
+        }
+    }
+
+    private void enrichDeviceIdentity(ChannelHandlerContext ctx, FireMessage message) {
+        String protocolAddress = message.getSourceAddress();
+        Map<String, Object> details = message.getProtocolDetails();
+
+        if ((message.getCommand() & 0xFF) == 0x00 && details != null) {
+            Object imei = details.get("imei");
+            if (imei != null && !String.valueOf(imei).isEmpty()) {
+                identityService.bind(ctx.channel(), protocolAddress, String.valueOf(imei));
+                details.put("protocolAddress", protocolAddress);
+                message.setSourceAddress(String.valueOf(imei));
+                return;
+            }
+        }
+
+        String resolved = identityService.resolve(ctx.channel(), protocolAddress);
+        if (resolved != null && !resolved.isEmpty()) {
+            if (details != null) {
+                details.put("protocolAddress", protocolAddress);
+                details.put("imei", resolved);
+            }
+            message.setSourceAddress(resolved);
         }
     }
 

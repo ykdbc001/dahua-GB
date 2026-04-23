@@ -23,7 +23,8 @@ class DahuaSimulatorServiceTest {
 
         Map<String, Object> status = service.getStatus();
         assertEquals("865176080842620", status.get("imei"));
-        assertEquals("176080842620", status.get("sourceAddress"));
+        assertEquals("865176080842620", status.get("sourceAddress"));
+        assertEquals("176080842620", status.get("protocolAddress"));
         assertEquals("SN0001", status.get("sn"));
         assertEquals("89860012345678901234", status.get("iccid"));
     }
@@ -81,9 +82,13 @@ class DahuaSimulatorServiceTest {
 
         java.util.List<Map<String, Object>> terminalStatus = (java.util.List<Map<String, Object>>) status.get("terminals");
         assertEquals("865176080842620", terminalStatus.get(0).get("imei"));
+        assertEquals("865176080842620", terminalStatus.get(0).get("sourceAddress"));
+        assertEquals("176080842620", terminalStatus.get(0).get("protocolAddress"));
         assertEquals(97, terminalStatus.get(0).get("componentType"));
         assertEquals("000000000001", terminalStatus.get(0).get("componentAddress"));
         assertEquals("865176080842621", terminalStatus.get(1).get("imei"));
+        assertEquals("865176080842621", terminalStatus.get(1).get("sourceAddress"));
+        assertEquals("176080842621", terminalStatus.get(1).get("protocolAddress"));
         assertEquals(74, terminalStatus.get(1).get("componentType"));
         assertEquals("000000000002", terminalStatus.get(1).get("componentAddress"));
     }

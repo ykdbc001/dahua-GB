@@ -233,7 +233,8 @@ public class DahuaSimulatorService {
 
         TerminalConfig primary = ensurePrimaryTerminal();
         status.put("imei", primary.imei);
-        status.put("sourceAddress", sourceAddress12(primary.imei));
+        status.put("sourceAddress", primary.imei);
+        status.put("protocolAddress", sourceAddress12(primary.imei));
         status.put("imsi", primary.imsi);
         status.put("iccid", primary.iccid);
         status.put("sn", primary.sn);
@@ -509,7 +510,8 @@ public class DahuaSimulatorService {
         for (TerminalConfig terminal : terminals) {
             LinkedHashMap<String, Object> item = new LinkedHashMap<String, Object>();
             item.put("imei", terminal.imei);
-            item.put("sourceAddress", sourceAddress12(terminal.imei));
+            item.put("sourceAddress", terminal.imei);
+            item.put("protocolAddress", sourceAddress12(terminal.imei));
             item.put("imsi", terminal.imsi);
             item.put("iccid", terminal.iccid);
             item.put("sn", terminal.sn);
