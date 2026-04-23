@@ -109,8 +109,8 @@
 
         <!-- 调试：设备模拟器（若看不到本块，请 Ctrl+F5 强刷或重新部署 jar） -->
         <div class="simulator-panel">
-            <h5>调试 · 设备模拟器</h5>
-            <p class="small text-muted mb-2 mb-md-3">向本机 TCP <strong>9000</strong> 发国标测试报文；仅当消防服务与模拟器在同一台机器时有效。</p>
+            <h5>调试 · 设备模拟器 <span id="simulator-mode-label" class="small text-primary ms-1">demo</span></h5>
+            <p class="small text-muted mb-2 mb-md-3" id="simulator-help-text">向本机 TCP <strong>9000</strong> 发国标测试报文；仅当消防服务与模拟器在同一台机器时有效。</p>
             <div class="row align-items-center g-2">
                 <div class="col-12 col-lg-6">
                     <div class="d-flex flex-wrap align-items-center gap-2">
@@ -193,6 +193,8 @@
                     type: 'POST',
                     contentType: 'application/json',
                     data: JSON.stringify({ mode: v })
+                }).done(function() {
+                    refreshSimulatorUi();
                 }).fail(function() {
                     appendLogLine('切换协议模式失败');
                     loadProtocolMode();
@@ -237,15 +239,28 @@
             $.getJSON('/api/fire-alarm/protocol-mode', function(d) {
                 var m = (d.mode || 'demo').toLowerCase();
                 $('input[name="proto-mode"][value="' + m + '"]').prop('checked', true);
+                updateSimulatorModeText(m);
             });
         }
 
         function refreshSimulatorUi() {
             $.getJSON('/api/fire-alarm/simulator/status', function(data) {
                 const running = data.running === true;
+                const mode = (data.mode || 'demo').toLowerCase();
                 $('#simulator-switch').prop('checked', running);
                 $('#simulator-state-text').text(running ? '状态：运行中' : '状态：未启动');
+                updateSimulatorModeText(mode);
             });
+        }
+
+        function updateSimulatorModeText(mode) {
+            const m = (mode || 'demo').toLowerCase();
+            $('#simulator-mode-label').text(m);
+            if (m === 'dahua') {
+                $('#simulator-help-text').html('向本机 TCP <strong>9000</strong> 发大华定制测试报文；当前开关会自动使用 IMEI/SN/ICCID 大华模拟器。');
+            } else {
+                $('#simulator-help-text').html('向本机 TCP <strong>9000</strong> 发国标测试报文；当前开关会自动使用国标 Demo 模拟器。');
+            }
         }
 
         function appendLogLine(line) {

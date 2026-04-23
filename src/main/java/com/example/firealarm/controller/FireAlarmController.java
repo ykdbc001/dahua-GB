@@ -2,6 +2,7 @@ package com.example.firealarm.controller;
 
 import com.example.firealarm.dto.SystemStatusDto;
 import com.example.firealarm.model.FireAlarmEvent;
+import com.example.firealarm.protocol.ProtocolMode;
 import com.example.firealarm.service.DahuaFrameHistoryService;
 import com.example.firealarm.service.DahuaSimulatorService;
 import com.example.firealarm.service.FireAlarmNotificationService;
@@ -64,26 +65,48 @@ public class FireAlarmController {
     }
 
     @GetMapping("/simulator/status")
-    public ResponseEntity<Map<String, Boolean>> getSimulatorStatus() {
-        Map<String, Boolean> body = new HashMap<>();
-        body.put("running", simulatorService.isRunning());
+    public ResponseEntity<Map<String, Object>> getSimulatorStatus() {
+        Map<String, Object> body = new HashMap<String, Object>();
+        ProtocolMode mode = protocolModeService.getMode();
+        boolean dahua = mode == ProtocolMode.DAHUA;
+        body.put("running", dahua ? dahuaSimulatorService.isRunning() : simulatorService.isRunning());
+        body.put("mode", mode.name().toLowerCase());
+        body.put("simulatorType", dahua ? "dahua" : "demo");
         return ResponseEntity.ok(body);
     }
 
     @PostMapping("/simulator/start")
     public ResponseEntity<Map<String, Object>> startSimulator() {
-        simulatorService.start();
-        Map<String, Object> body = new HashMap<>();
-        body.put("running", simulatorService.isRunning());
+        Map<String, Object> body = new HashMap<String, Object>();
+        ProtocolMode mode = protocolModeService.getMode();
+        if (mode == ProtocolMode.DAHUA) {
+            dahuaSimulatorService.start();
+            body.put("running", dahuaSimulatorService.isRunning());
+            body.put("simulatorType", "dahua");
+        } else {
+            simulatorService.start();
+            body.put("running", simulatorService.isRunning());
+            body.put("simulatorType", "demo");
+        }
+        body.put("mode", mode.name().toLowerCase());
         body.put("ok", true);
         return ResponseEntity.ok(body);
     }
 
     @PostMapping("/simulator/stop")
     public ResponseEntity<Map<String, Object>> stopSimulator() {
-        simulatorService.stop();
-        Map<String, Object> body = new HashMap<>();
-        body.put("running", simulatorService.isRunning());
+        Map<String, Object> body = new HashMap<String, Object>();
+        ProtocolMode mode = protocolModeService.getMode();
+        if (mode == ProtocolMode.DAHUA) {
+            dahuaSimulatorService.stop();
+            body.put("running", dahuaSimulatorService.isRunning());
+            body.put("simulatorType", "dahua");
+        } else {
+            simulatorService.stop();
+            body.put("running", simulatorService.isRunning());
+            body.put("simulatorType", "demo");
+        }
+        body.put("mode", mode.name().toLowerCase());
         body.put("ok", true);
         return ResponseEntity.ok(body);
     }
@@ -102,9 +125,16 @@ public class FireAlarmController {
     public ResponseEntity<Map<String, Object>> setProtocolMode(@RequestBody Map<String, String> body) {
         String raw = body != null ? body.get("mode") : null;
         protocolModeService.setModeFromString(raw);
-        Map<String, Object> res = new HashMap<>();
+        ProtocolMode mode = protocolModeService.getMode();
+        if (mode == ProtocolMode.DAHUA) {
+            simulatorService.stop();
+        } else {
+            dahuaSimulatorService.stop();
+        }
+        Map<String, Object> res = new HashMap<String, Object>();
         res.put("ok", true);
-        res.put("mode", protocolModeService.getMode().name().toLowerCase());
+        res.put("mode", mode.name().toLowerCase());
+        res.put("simulatorType", mode == ProtocolMode.DAHUA ? "dahua" : "demo");
         return ResponseEntity.ok(res);
     }
 
