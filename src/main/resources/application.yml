@@ -1,0 +1,22 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: fire-alarm-system
+  web:
+    resources:
+      cache:
+        period: 0   # 静态页不长期缓存，避免 index.html 更新后浏览器仍用旧版
+
+# 消防设备连接配置
+fire-alarm:
+  # tcp 解析模式：demo | dahua（首页可切换，仅内存；重启后恢复为本配置）
+  protocol-mode: demo
+  server:
+    port: 9000  # 消防主机连接端口
+    read-timeout: 60000  # 读取超时时间(毫秒)
+    idle-timeout: 180000  # 空闲超时时间(毫秒)
+  simulator:
+    # 是否在应用启动后自动连接本机 9000 并开始模拟（默认 false，使用首页开关）
+    auto-start: false

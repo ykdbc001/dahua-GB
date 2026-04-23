@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
+    <meta http-equiv="Pragma" content="no-cache"/>
+    <title>消防报警系统</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            padding-top: 20px;
+            background-color: #f5f5f5;
+        }
+        .alarm-card {
+            margin-bottom: 15px;
+            border-left: 5px solid #dc3545;
+        }
+        .fault-card {
+            margin-bottom: 15px;
+            border-left: 5px solid #ffc107;
+        }
+        .normal-card {
+            margin-bottom: 15px;
+            border-left: 5px solid #198754;
+        }
+        .alarm-header {
+            background-color: rgba(220, 53, 69, 0.1);
+        }
+        .fault-header {
+            background-color: rgba(255, 193, 7, 0.1);
+        }
+        .normal-header {
+            background-color: rgba(25, 135, 84, 0.1);
+        }
+        .status-badge {
+            font-size: 0.9rem;
+        }
+        .alarm-time {
+            font-size: 0.8rem;
+            color: #6c757d;
+        }
+        .system-status {
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .status-normal {
+            background-color: rgba(25, 135, 84, 0.1);
+        }
+        .status-alarm {
+            background-color: rgba(220, 53, 69, 0.1);
+            animation: blink 1s infinite;
+        }
+        .status-fault {
+            background-color: rgba(255, 193, 7, 0.1);
+        }
+        #log-panel {
+            height: 260px;
+            overflow-y: auto;
+            font-size: 12px;
+            margin: 0;
+            padding: 10px;
+            background-color: #1e1e1e;
+            color: #d4d4d4;
+            font-family: ui-monospace, Consolas, monospace;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        @keyframes blink {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        /* 模拟器区：不依赖 Bootstrap CDN 也能看见开关 */
+        .simulator-panel {
+            border: 2px solid #0d6efd;
+            border-radius: 8px;
+            background: #e7f1ff;
+            padding: 14px 16px;
+            margin-bottom: 1rem;
+        }
+        .simulator-panel h5 {
+            margin: 0 0 10px 0;
+            color: #084298;
+            font-size: 1.1rem;
+        }
+        #simulator-switch {
+            width: 2.5em;
+            height: 1.35em;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="text-center mb-4">消防报警系统</h1>
+
+        <div class="card mb-3 border-secondary">
+            <div class="card-body py-3">
+                <strong class="d-block mb-2">TCP 9000 解析 / 应答模式</strong>
+                <div class="d-flex flex-wrap gap-3 align-items-center">
+                    <label class="mb-0"><input type="radio" name="proto-mode" value="demo" checked> 国标 <strong>Demo</strong>（<code>protocol.demo</code>）</label>
+                    <label class="mb-0"><input type="radio" name="proto-mode" value="dahua"> <strong>大华定制</strong>（<code>protocol.dahua</code>，可独立改组帧与确认帧）</label>
+                </div>
+                <p class="small text-muted mt-2 mb-0">切换后立即作用于<strong>随后进入的字节流</strong>；已在传的连接建议设备重连。服务重启后恢复为 <code>application.yml</code> 中的 <code>fire-alarm.protocol-mode</code>。</p>
+            </div>
+        </div>
+
+        <!-- 调试：设备模拟器（若看不到本块，请 Ctrl+F5 强刷或重新部署 jar） -->
+        <div class="simulator-panel">
+            <h5>调试 · 设备模拟器</h5>
+            <p class="small text-muted mb-2 mb-md-3">向本机 TCP <strong>9000</strong> 发国标测试报文；仅当消防服务与模拟器在同一台机器时有效。</p>
+            <div class="row align-items-center g-2">
+                <div class="col-12 col-lg-6">
+                    <div class="d-flex flex-wrap align-items-center gap-2">
+                        <label class="d-flex align-items-center gap-2 mb-0" style="cursor:pointer;">
+                            <input type="checkbox" id="simulator-switch" role="switch" title="模拟器开关">
+                            <span><strong>开关</strong>（勾选=启动）</span>
+                        </label>
+                    </div>
+                </div>
+                <div class="col-12 col-lg-6">
+                    <div class="d-flex flex-wrap gap-2 justify-content-lg-end">
+                        <button type="button" class="btn btn-primary btn-sm" id="btn-sim-start">开启模拟器</button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" id="btn-sim-stop">停止模拟器</button>
+                        <span class="align-self-center small fw-bold" id="simulator-state-text">状态：未启动</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center py-2">
+                <span>实时日志（包 <code>com.example.firealarm</code>）</span>
+                <button type="button" class="btn btn-sm btn-outline-secondary" id="btn-clear-log">清空</button>
+            </div>
+            <div class="card-body p-0">
+                <pre id="log-panel"></pre>
+            </div>
+        </div>
+        
+        <!-- 系统状态 -->
+        <div id="system-status" class="system-status status-normal mb-4">
+            <div class="row">
+                <div class="col-md-6">
+                    <h4>系统状态: <span id="status-text">正常</span></h4>
+                </div>
+                <div class="col-md-6 text-end">
+                    <span class="badge bg-danger me-2">火警: <span id="fire-count">0</span></span>
+                    <span class="badge bg-warning text-dark me-2">故障: <span id="fault-count">0</span></span>
+                    <span class="badge bg-secondary">其他: <span id="other-count">0</span></span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 报警事件列表 -->
+        <div class="row">
+            <div class="col-md-12">
+                <h3>报警事件</h3>
+                <div id="alarm-list" class="mt-3">
+                    <!-- 报警事件将在这里动态添加 -->
+                    <div class="alert alert-info">暂无报警事件</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript 库 -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jquery@3.6.0/dist/jquery.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1.5.2/dist/sockjs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
+    <script>
+        // 存储当前活跃的报警事件
+        const activeAlarms = new Map();
+        let stompClient = null;
+        let logLineCount = 0;
+        const MAX_LOG_LINES = 400;
+
+        // 页面加载完成后执行
+        $(document).ready(function() {
+            connectWebSocket();
+            loadActiveAlarms();
+            loadSystemStatus();
+            refreshSimulatorUi();
+            loadProtocolMode();
+
+            $('input[name="proto-mode"]').on('change', function() {
+                var v = $(this).val();
+                $.ajax({
+                    url: '/api/fire-alarm/protocol-mode',
+                    type: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify({ mode: v })
+                }).fail(function() {
+                    appendLogLine('切换协议模式失败');
+                    loadProtocolMode();
+                });
+            });
+
+            function postSimulator(on) {
+                const url = on ? '/api/fire-alarm/simulator/start' : '/api/fire-alarm/simulator/stop';
+                return $.ajax({ url: url, type: 'POST' });
+            }
+
+            $('#simulator-switch').on('change', function() {
+                const on = $(this).is(':checked');
+                postSimulator(on)
+                    .done(function() { refreshSimulatorUi(); })
+                    .fail(function() {
+                        $('#simulator-switch').prop('checked', !on);
+                        appendLogLine('模拟器开关请求失败（检查是否已登录同一站点、接口是否 404）');
+                    });
+            });
+
+            $('#btn-sim-start').on('click', function() {
+                postSimulator(true)
+                    .done(function() { refreshSimulatorUi(); appendLogLine('[模拟器] 已请求开启'); })
+                    .fail(function() { appendLogLine('[模拟器] 开启失败'); });
+            });
+            $('#btn-sim-stop').on('click', function() {
+                postSimulator(false)
+                    .done(function() { refreshSimulatorUi(); appendLogLine('[模拟器] 已请求停止'); })
+                    .fail(function() { appendLogLine('[模拟器] 停止失败'); });
+            });
+
+            $('#btn-clear-log').on('click', function() {
+                $('#log-panel').empty();
+                logLineCount = 0;
+            });
+
+            setInterval(loadSystemStatus, 60000);
+        });
+
+        function loadProtocolMode() {
+            $.getJSON('/api/fire-alarm/protocol-mode', function(d) {
+                var m = (d.mode || 'demo').toLowerCase();
+                $('input[name="proto-mode"][value="' + m + '"]').prop('checked', true);
+            });
+        }
+
+        function refreshSimulatorUi() {
+            $.getJSON('/api/fire-alarm/simulator/status', function(data) {
+                const running = data.running === true;
+                $('#simulator-switch').prop('checked', running);
+                $('#simulator-state-text').text(running ? '状态：运行中' : '状态：未启动');
+            });
+        }
+
+        function appendLogLine(line) {
+            const pre = $('#log-panel');
+            pre.append(document.createTextNode(line + '\n'));
+            logLineCount++;
+            if (logLineCount > MAX_LOG_LINES) {
+                const lines = pre.text().split('\n');
+                const keep = lines.slice(-Math.floor(MAX_LOG_LINES * 0.8));
+                pre.text(keep.join('\n') + '\n');
+                logLineCount = keep.length;
+            }
+            const el = pre.get(0);
+            el.scrollTop = el.scrollHeight;
+        }
+
+        // 连接WebSocket
+        function connectWebSocket() {
+            const socket = new SockJS('/ws');
+            stompClient = Stomp.over(socket);
+            
+            stompClient.connect({}, function(frame) {
+                console.log('WebSocket连接成功: ' + frame);
+
+                stompClient.subscribe('/topic/alarms', function(message) {
+                    const event = JSON.parse(message.body);
+                    handleAlarmEvent(event);
+                });
+
+                stompClient.subscribe('/topic/system-status', function(message) {
+                    try {
+                        updateSystemStatus(JSON.parse(message.body));
+                    } catch (e) {
+                        console.error(e);
+                    }
+                });
+
+                stompClient.subscribe('/topic/logs', function(message) {
+                    appendLogLine(message.body);
+                });
+            }, function(error) {
+                console.error('WebSocket连接失败: ' + error);
+                // 5秒后尝试重新连接
+                setTimeout(connectWebSocket, 5000);
+            });
+        }
+
+        // 加载当前活跃的报警事件
+        function loadActiveAlarms() {
+            $.ajax({
+                url: '/api/fire-alarm/active-alarms',
+                type: 'GET',
+                success: function(data) {
+                    // 清空报警列表
+                    $('#alarm-list').empty();
+                    
+                    if (data.length === 0) {
+                        $('#alarm-list').append('<div class="alert alert-info">暂无报警事件</div>');
+                        return;
+                    }
+                    
+                    // 添加报警事件
+                    data.forEach(function(event) {
+                        addAlarmToList(event);
+                        activeAlarms.set(event.id, event);
+                    });
+                },
+                error: function(error) {
+                    console.error('加载报警事件失败: ', error);
+                }
+            });
+        }
+
+        // 加载系统状态
+        function loadSystemStatus() {
+            $.ajax({
+                url: '/api/fire-alarm/system-status',
+                type: 'GET',
+                success: function(data) {
+                    updateSystemStatus(data);
+                },
+                error: function(error) {
+                    console.error('加载系统状态失败: ', error);
+                }
+            });
+        }
+
+        // 处理报警事件
+        function handleAlarmEvent(event) {
+            // 根据事件类型处理
+            if (event.componentStatus === 0) { // 正常状态
+                // 移除报警事件
+                activeAlarms.delete(event.id);
+                $(`#alarm-${event.id}`).remove();
+                
+                // 如果没有报警事件，显示提示信息
+                if (activeAlarms.size === 0) {
+                    $('#alarm-list').html('<div class="alert alert-info">暂无报警事件</div>');
+                }
+            } else {
+                // 添加或更新报警事件
+                activeAlarms.set(event.id, event);
+                
+                // 如果是第一个报警事件，清空提示信息
+                if (activeAlarms.size === 1) {
+                    $('#alarm-list').empty();
+                }
+                
+                // 添加报警事件到列表
+                addAlarmToList(event);
+            }
+            
+            loadSystemStatus();
+        }
+
+        // 添加报警事件到列表
+        function addAlarmToList(event) {
+            // 移除已存在的相同ID的事件
+            $(`#alarm-${event.id}`).remove();
+            
+            // 根据事件类型设置样式
+            let cardClass = 'normal-card';
+            let headerClass = 'normal-header';
+            let badgeClass = 'bg-success';
+            let statusText = '正常';
+            
+            if (event.eventType === 1) { // 火警
+                cardClass = 'alarm-card';
+                headerClass = 'alarm-header';
+                badgeClass = 'bg-danger';
+                statusText = '火警';
+            } else if (event.eventType === 2) { // 故障
+                cardClass = 'fault-card';
+                headerClass = 'fault-header';
+                badgeClass = 'bg-warning text-dark';
+                statusText = '故障';
+            }
+            
+            // 格式化时间
+            const occurTime = new Date(event.occurTime).toLocaleString();
+            
+            // 创建报警事件卡片
+            const card = `
+                <div id="alarm-${event.id}" class="card ${cardClass} mb-3">
+                    <div class="card-header ${headerClass} d-flex justify-content-between align-items-center">
+                        <span>${event.description}</span>
+                        <span class="badge ${badgeClass} status-badge">${statusText}</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <p class="mb-1"><strong>设备地址:</strong> ${event.deviceAddress}</p>
+                                <p class="mb-1"><strong>部件地址:</strong> ${event.componentAddress}</p>
+                            </div>
+                            <div class="col-md-6 text-end">
+                                <p class="alarm-time mb-0">发生时间: ${occurTime}</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // 添加到列表开头
+            $('#alarm-list').prepend(card);
+        }
+
+        // 更新系统状态
+        function updateSystemStatus(data) {
+            // 更新计数
+            $('#fire-count').text(data.fireAlarms);
+            $('#fault-count').text(data.faults);
+            $('#other-count').text(data.others);
+            
+            // 更新状态文本
+            $('#status-text').text(data.status);
+            
+            // 更新状态样式
+            const statusDiv = $('#system-status');
+            statusDiv.removeClass('status-normal status-alarm status-fault');
+            
+            if (data.fireAlarms > 0) {
+                statusDiv.addClass('status-alarm');
+            } else if (data.faults > 0) {
+                statusDiv.addClass('status-fault');
+            } else {
+                statusDiv.addClass('status-normal');
+            }
+        }
+    </script>
+</body>
+</html>
