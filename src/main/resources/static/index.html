@@ -124,6 +124,8 @@
                     <div class="d-flex flex-wrap gap-2 justify-content-lg-end">
                         <button type="button" class="btn btn-primary btn-sm" id="btn-sim-start">开启模拟器</button>
                         <button type="button" class="btn btn-outline-secondary btn-sm" id="btn-sim-stop">停止模拟器</button>
+                        <button type="button" class="btn btn-outline-primary btn-sm" id="btn-dahua-generate-all">生成 51 台终端</button>
+                        <button type="button" class="btn btn-danger btn-sm" id="btn-dahua-generate-and-run">51 台全量模拟</button>
                         <span class="align-self-center small fw-bold" id="simulator-state-text">状态：未启动</span>
                     </div>
                 </div>
@@ -206,6 +208,13 @@
                 return $.ajax({ url: url, type: 'POST' });
             }
 
+            function postDahuaGenerateAll(runImmediately) {
+                const url = runImmediately
+                    ? '/api/fire-alarm/dahua-simulator/generate-all-and-simulate'
+                    : '/api/fire-alarm/dahua-simulator/generate-all-terminals';
+                return $.ajax({ url: url, type: 'POST' });
+            }
+
             $('#simulator-switch').on('change', function() {
                 const on = $(this).is(':checked');
                 postSimulator(on)
@@ -225,6 +234,24 @@
                 postSimulator(false)
                     .done(function() { refreshSimulatorUi(); appendLogLine('[模拟器] 已请求停止'); })
                     .fail(function() { appendLogLine('[模拟器] 停止失败'); });
+            });
+
+            $('#btn-dahua-generate-all').on('click', function() {
+                postDahuaGenerateAll(false)
+                    .done(function(data) {
+                        refreshSimulatorUi();
+                        appendLogLine('[大华] 已生成 51 台终端配置，当前终端数 ' + data.terminalCount);
+                    })
+                    .fail(function() { appendLogLine('[大华] 生成 51 台终端失败'); });
+            });
+
+            $('#btn-dahua-generate-and-run').on('click', function() {
+                postDahuaGenerateAll(true)
+                    .done(function(data) {
+                        refreshSimulatorUi();
+                        appendLogLine('[大华] 已生成 51 台终端并启动全量模拟，当前终端数 ' + data.terminalCount);
+                    })
+                    .fail(function() { appendLogLine('[大华] 51 台终端全量模拟失败'); });
             });
 
             $('#btn-clear-log').on('click', function() {
@@ -257,7 +284,7 @@
             const m = (mode || 'demo').toLowerCase();
             $('#simulator-mode-label').text(m);
             if (m === 'dahua') {
-                $('#simulator-help-text').html('向本机 TCP <strong>9000</strong> 发大华定制测试报文；当前开关会自动使用 IMEI/SN/ICCID 大华模拟器。');
+                $('#simulator-help-text').html('向本机 TCP <strong>9000</strong> 发大华定制测试报文；当前开关会自动使用 IMEI/SN/ICCID 大华模拟器。也可以直接点击“生成 51 台终端”或“51 台全量模拟”。');
             } else {
                 $('#simulator-help-text').html('向本机 TCP <strong>9000</strong> 发国标测试报文；当前开关会自动使用国标 Demo 模拟器。');
             }
